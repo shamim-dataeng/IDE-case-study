@@ -1,0 +1,17 @@
+{
+	"name": "SQL_Config_Script",
+	"properties": {
+		"content": {
+			"query": "CREATE DATABASE gold_taxi_dw;\nGO\nUSE gold_taxi_dw;\nGO\n\nCREATE MASTER KEY ENCRYPTION BY PASSWORD = 'Str0ng!P@ssw0rd#2024';\nGO\n\n-- Credential using your Entra identity (since you already have Storage Blob Data Contributor)\nCREATE DATABASE SCOPED CREDENTIAL synapse_managed_identity\nWITH IDENTITY = 'Managed Identity';\nGO\n\nCREATE EXTERNAL DATA SOURCE gold_lake\nWITH (\n    LOCATION = 'abfss://gold@idestorageaccount.dfs.core.windows.net/',\n    CREDENTIAL = synapse_managed_identity\n);\nGO",
+			"metadata": {
+				"language": "sql"
+			},
+			"currentConnection": {
+				"databaseName": "gold_taxi_dw",
+				"poolName": "Built-in"
+			},
+			"resultLimit": 5000
+		},
+		"type": "SqlQuery"
+	}
+}

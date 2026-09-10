@@ -1,0 +1,17 @@
+{
+	"name": "SQL_View_Creation",
+	"properties": {
+		"content": {
+			"query": "USE gold_taxi_dw;\nGO\n\nCREATE VIEW dbo.fact_trips AS\nSELECT * FROM OPENROWSET(\n    BULK 'fact_trips/',\n    DATA_SOURCE = 'gold_lake',\n    FORMAT = 'DELTA'\n) AS result;\nGO\n\nCREATE VIEW dbo.dim_date AS\nSELECT * FROM OPENROWSET(BULK 'dim_date/', DATA_SOURCE = 'gold_lake', FORMAT = 'DELTA') AS result;\nGO\n\nCREATE VIEW dbo.dim_time AS\nSELECT * FROM OPENROWSET(BULK 'dim_time/', DATA_SOURCE = 'gold_lake', FORMAT = 'DELTA') AS result;\nGO\n\nCREATE VIEW dbo.dim_location AS\nSELECT * FROM OPENROWSET(BULK 'dim_location/', DATA_SOURCE = 'gold_lake', FORMAT = 'DELTA') AS result;\nGO\n\nCREATE VIEW dbo.dim_vendor AS\nSELECT * FROM OPENROWSET(BULK 'dim_vendor/', DATA_SOURCE = 'gold_lake', FORMAT = 'DELTA') AS result;\nGO\n\nCREATE VIEW dbo.dim_ratecode AS\nSELECT * FROM OPENROWSET(BULK 'dim_ratecode/', DATA_SOURCE = 'gold_lake', FORMAT = 'DELTA') AS result;\nGO\n\nCREATE VIEW dbo.dim_payment_type AS\nSELECT * FROM OPENROWSET(BULK 'dim_payment_type/', DATA_SOURCE = 'gold_lake', FORMAT = 'DELTA') AS result;\nGO",
+			"metadata": {
+				"language": "sql"
+			},
+			"currentConnection": {
+				"databaseName": "gold_taxi_dw",
+				"poolName": "Built-in"
+			},
+			"resultLimit": 5000
+		},
+		"type": "SqlQuery"
+	}
+}

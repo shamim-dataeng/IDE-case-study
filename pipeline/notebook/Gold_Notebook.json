@@ -1,0 +1,177 @@
+{
+	"name": "Gold_Notebook",
+	"properties": {
+		"nbformat": 4,
+		"nbformat_minor": 2,
+		"bigDataPool": {
+			"referenceName": "idesparkpool",
+			"type": "BigDataPoolReference"
+		},
+		"sessionProperties": {
+			"driverMemory": "28g",
+			"driverCores": 4,
+			"executorMemory": "28g",
+			"executorCores": 4,
+			"numExecutors": 2,
+			"conf": {
+				"spark.dynamicAllocation.enabled": "false",
+				"spark.dynamicAllocation.minExecutors": "2",
+				"spark.dynamicAllocation.maxExecutors": "2",
+				"spark.autotune.trackingId": "64be9909-e55f-4d3f-bea6-2faf070ebf7d"
+			}
+		},
+		"metadata": {
+			"saveOutput": true,
+			"enableDebugMode": false,
+			"kernelspec": {
+				"name": "synapse_pyspark",
+				"display_name": "Synapse PySpark"
+			},
+			"language_info": {
+				"name": "python"
+			},
+			"a365ComputeOptions": {
+				"id": "/subscriptions/a538b6ff-31cc-4e59-be0d-19d7519d9ef7/resourceGroups/IDE-caseStudy/providers/Microsoft.Synapse/workspaces/ide-case-study-synapse/bigDataPools/idesparkpool",
+				"name": "idesparkpool",
+				"type": "Spark",
+				"endpoint": "https://ide-case-study-synapse.dev.azuresynapse.net/livyApi/versions/2019-11-01-preview/sparkPools/idesparkpool",
+				"auth": {
+					"type": "AAD",
+					"authResource": "https://dev.azuresynapse.net"
+				},
+				"sparkVersion": "3.5",
+				"nodeCount": 3,
+				"cores": 4,
+				"memory": 28,
+				"automaticScaleJobs": false
+			},
+			"sessionKeepAliveTimeout": 30
+		},
+		"cells": [
+			{
+				"cell_type": "code",
+				"metadata": {
+					"collapsed": false
+				},
+				"source": [
+					"from pyspark.sql import functions as F\n",
+					"\n",
+					"silver_df = spark.read.format(\"delta\").load(\n",
+					"    \"abfss://silver@idestorageaccount.dfs.core.windows.net/nyc_yellow_taxi/\"\n",
+					")\n",
+					"display(silver_df.limit(5))"
+				],
+				"execution_count": 5
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"from pyspark.sql import functions as F\n",
+					"\n",
+					"# ---------- dim_date ----------\n",
+					"dim_date = (\n",
+					"    silver_df.select(F.to_date(\"tpep_pickup_datetime\").alias(\"full_date\"))\n",
+					"    .union(silver_df.select(F.to_date(\"tpep_dropoff_datetime\").alias(\"full_date\")))\n",
+					"    .distinct()\n",
+					"    .withColumn(\"date_key\", F.date_format(\"full_date\", \"yyyyMMdd\").cast(\"int\"))\n",
+					"    .withColumn(\"year\", F.year(\"full_date\"))\n",
+					"    .withColumn(\"month\", F.month(\"full_date\"))\n",
+					"    .withColumn(\"month_name\", F.date_format(\"full_date\", \"MMMM\"))\n",
+					"    .withColumn(\"day\", F.dayofmonth(\"full_date\"))\n",
+					"    .withColumn(\"day_of_week\", F.dayofweek(\"full_date\"))\n",
+					"    .withColumn(\"day_name\", F.date_format(\"full_date\", \"EEEE\"))\n",
+					"    .withColumn(\"is_weekend\", F.col(\"day_of_week\").isin([1, 7]))\n",
+					")\n",
+					"dim_date.write.format(\"delta\").mode(\"overwrite\").save(\n",
+					"    \"abfss://gold@idestorageaccount.dfs.core.windows.net/dim_date/\"\n",
+					")\n",
+					"\n",
+					"# ---------- dim_time ----------\n",
+					"dim_time = spark.range(0, 1440).select(\n",
+					"    (F.col(\"id\")).alias(\"time_key\"),\n",
+					"    (F.col(\"id\") / 60).cast(\"int\").alias(\"hour\"),\n",
+					"    (F.col(\"id\") % 60).cast(\"int\").alias(\"minute\")\n",
+					").withColumn(\"am_pm\", F.when(F.col(\"hour\") < 12, \"AM\").otherwise(\"PM\"))\n",
+					"dim_time.write.format(\"delta\").mode(\"overwrite\").save(\n",
+					"    \"abfss://gold@idestorageaccount.dfs.core.windows.net/dim_time/\"\n",
+					")\n",
+					"\n",
+					"# ---------- dim_location ----------\n",
+					"dim_location = (\n",
+					"    silver_df.select(F.col(\"PULocationID\").alias(\"location_key\"))\n",
+					"    .union(silver_df.select(F.col(\"DOLocationID\").alias(\"location_key\")))\n",
+					"    .distinct()\n",
+					")\n",
+					"dim_location.write.format(\"delta\").mode(\"overwrite\").save(\n",
+					"    \"abfss://gold@idestorageaccount.dfs.core.windows.net/dim_location/\"\n",
+					")\n",
+					"\n",
+					"# ---------- dim_vendor ----------\n",
+					"dim_vendor = spark.createDataFrame([\n",
+					"    (1, \"Creative Mobile Technologies\"),\n",
+					"    (2, \"Curb Mobility\"),\n",
+					"    (6, \"Myle Technologies\"),\n",
+					"    (7, \"Helix\")\n",
+					"], [\"vendor_key\", \"vendor_name\"])\n",
+					"dim_vendor.write.format(\"delta\").mode(\"overwrite\").save(\n",
+					"    \"abfss://gold@idestorageaccount.dfs.core.windows.net/dim_vendor/\"\n",
+					")\n",
+					"\n",
+					"# ---------- dim_ratecode ----------\n",
+					"dim_ratecode = spark.createDataFrame([\n",
+					"    (1, \"Standard rate\"), (2, \"JFK\"), (3, \"Newark\"),\n",
+					"    (4, \"Nassau/Westchester\"), (5, \"Negotiated fare\"),\n",
+					"    (6, \"Group ride\"), (99, \"Unknown\")\n",
+					"], [\"ratecode_key\", \"ratecode_desc\"])\n",
+					"dim_ratecode.write.format(\"delta\").mode(\"overwrite\").save(\n",
+					"    \"abfss://gold@idestorageaccount.dfs.core.windows.net/dim_ratecode/\"\n",
+					")\n",
+					"\n",
+					"# ---------- dim_payment_type ----------\n",
+					"dim_payment_type = spark.createDataFrame([\n",
+					"    (1, \"Credit card\"), (2, \"Cash\"), (3, \"No charge\"),\n",
+					"    (4, \"Dispute\"), (5, \"Unknown\"), (6, \"Voided trip\")\n",
+					"], [\"payment_type_key\", \"payment_desc\"])\n",
+					"dim_payment_type.write.format(\"delta\").mode(\"overwrite\").save(\n",
+					"    \"abfss://gold@idestorageaccount.dfs.core.windows.net/dim_payment_type/\"\n",
+					")\n",
+					"\n",
+					"# ---------- fact_trips ----------\n",
+					"fact_trips = (\n",
+					"    silver_df\n",
+					"    .withColumn(\"trip_id\", F.monotonically_increasing_id())\n",
+					"    .withColumn(\"pickup_date_key\", F.date_format(\"tpep_pickup_datetime\", \"yyyyMMdd\").cast(\"int\"))\n",
+					"    .withColumn(\"dropoff_date_key\", F.date_format(\"tpep_dropoff_datetime\", \"yyyyMMdd\").cast(\"int\"))\n",
+					"    .withColumn(\"pickup_time_key\", (F.hour(\"tpep_pickup_datetime\") * 60 + F.minute(\"tpep_pickup_datetime\")))\n",
+					"    .withColumn(\"dropoff_time_key\", (F.hour(\"tpep_dropoff_datetime\") * 60 + F.minute(\"tpep_dropoff_datetime\")))\n",
+					"    .select(\n",
+					"        \"trip_id\", \"pickup_date_key\", \"dropoff_date_key\", \"pickup_time_key\", \"dropoff_time_key\",\n",
+					"        F.col(\"PULocationID\").alias(\"pu_location_key\"),\n",
+					"        F.col(\"DOLocationID\").alias(\"do_location_key\"),\n",
+					"        F.col(\"VendorID\").alias(\"vendor_key\"),\n",
+					"        F.col(\"RatecodeID\").alias(\"ratecode_key\"),\n",
+					"        F.col(\"payment_type\").alias(\"payment_type_key\"),\n",
+					"        \"passenger_count\", \"trip_distance\", \"trip_duration_minutes\",\n",
+					"        \"fare_amount\", \"extra\", \"mta_tax\", \"tip_amount\", \"tolls_amount\",\n",
+					"        \"improvement_surcharge\", \"congestion_surcharge\",\n",
+					"        F.col(\"Airport_fee\").alias(\"airport_fee\"), \"total_amount\"\n",
+					"    )\n",
+					")\n",
+					"fact_trips.write.format(\"delta\").mode(\"overwrite\").save(\n",
+					"    \"abfss://gold@idestorageaccount.dfs.core.windows.net/fact_trips/\"\n",
+					")\n",
+					"\n",
+					"fact_trips.count()"
+				],
+				"execution_count": 6
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					""
+				],
+				"execution_count": null
+			}
+		]
+	}
+}
