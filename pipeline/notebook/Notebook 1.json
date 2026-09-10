@@ -1,0 +1,176 @@
+{
+	"name": "Notebook 1",
+	"properties": {
+		"nbformat": 4,
+		"nbformat_minor": 2,
+		"bigDataPool": {
+			"referenceName": "idesparkpool",
+			"type": "BigDataPoolReference"
+		},
+		"sessionProperties": {
+			"driverMemory": "28g",
+			"driverCores": 4,
+			"executorMemory": "28g",
+			"executorCores": 4,
+			"numExecutors": 2,
+			"conf": {
+				"spark.dynamicAllocation.enabled": "false",
+				"spark.dynamicAllocation.minExecutors": "2",
+				"spark.dynamicAllocation.maxExecutors": "2",
+				"spark.autotune.trackingId": "f7b13139-842f-4fbe-81bf-a16d82b8fe26"
+			}
+		},
+		"metadata": {
+			"saveOutput": true,
+			"enableDebugMode": false,
+			"kernelspec": {
+				"name": "synapse_pyspark",
+				"display_name": "Synapse PySpark"
+			},
+			"language_info": {
+				"name": "python"
+			},
+			"a365ComputeOptions": {
+				"id": "/subscriptions/a538b6ff-31cc-4e59-be0d-19d7519d9ef7/resourceGroups/IDE-caseStudy/providers/Microsoft.Synapse/workspaces/ide-case-study-synapse/bigDataPools/idesparkpool",
+				"name": "idesparkpool",
+				"type": "Spark",
+				"endpoint": "https://ide-case-study-synapse.dev.azuresynapse.net/livyApi/versions/2019-11-01-preview/sparkPools/idesparkpool",
+				"auth": {
+					"type": "AAD",
+					"authResource": "https://dev.azuresynapse.net"
+				},
+				"sparkVersion": "3.5",
+				"nodeCount": 3,
+				"cores": 4,
+				"memory": 28,
+				"automaticScaleJobs": false
+			},
+			"sessionKeepAliveTimeout": 30
+		},
+		"cells": [
+			{
+				"cell_type": "code",
+				"metadata": {
+					"collapsed": false
+				},
+				"source": [
+					"df=spark.read.parquet(\"abfss://bronze@idestorageaccount.dfs.core.windows.net/nyc_yellow_taxi\")\n",
+					"df.printSchema()\n",
+					"print(df.count())\n",
+					"display(df.limit(5))"
+				],
+				"execution_count": 10
+			},
+			{
+				"cell_type": "code",
+				"metadata": {
+					"collapsed": false
+				},
+				"source": [
+					"from pyspark.sql import functions as F\n",
+					"\n",
+					"# nulls per column\n",
+					"display(df.select([F.count(F.when(F.col(c).isNull(), c)).alias(c) for c in df.columns]))\n",
+					"\n",
+					"# negative/zero fares, distances\n",
+					"print(\"neg_fares\")\n",
+					"print(df.filter((F.col(\"fare_amount\") <= 0) | (F.col(\"trip_distance\") <= 0)).count())\n",
+					"\n",
+					"# passenger count sanity check\n",
+					"display(df.select(\"passenger_count\").distinct().orderBy(\"passenger_count\"))\n",
+					"\n",
+					"# datetime range check\n",
+					"display(df.select(F.min(\"tpep_pickup_datetime\"), F.max(\"tpep_pickup_datetime\")))\n",
+					"\n",
+					"# dropoff before pickup (impossible trips)\n",
+					"print(f\"dropoff before pickup: {df.filter(F.col('tpep_dropoff_datetime') < F.col('tpep_pickup_datetime')).count()}\")\n",
+					"# duplicate rows\n",
+					"print(df.count() - df.dropDuplicates().count())"
+				],
+				"execution_count": 12
+			},
+			{
+				"cell_type": "markdown",
+				"metadata": {
+					"nteract": {
+						"transient": {
+							"deleting": false
+						}
+					}
+				},
+				"source": [
+					"## <mark>Silver Rules:</mark>\n",
+					"#### **1. null values:** \n",
+					"passenger_count,RatecodeID,store_and_fwd_flag,congestion_surcharge,Airport_fee - each of these cols hold 426,190 null values (~11.9% of the data)<br>\n",
+					"treatment: impute values<br>\n",
+					"passenger_count- 1 (most common val)<br>\n",
+					"RatecodeID-99(as per TLC dict, unknown or null rate)<br> \n",
+					"store_and_fwd_flag-'N'(majority)<br>\n",
+					"congestion_surcharge-0<br>\n",
+					"Airport_fee-0<br>\n",
+					"#### **2. tpep_pickup_datetime range**\n",
+					"Min = 2002-12-31 (garbage), max = 2024-04-01 (TLC files always spill a few hours into next month)\n",
+					"treatment: Filter to valid expected month range only \n",
+					"#### **3. dropoff before pickup**\n",
+					"117 rows\n",
+					"treatment: Drop, physically invalid trips\n",
+					"#### **4. duplicates**\n",
+					"0 which implies no treatment\n",
+					"#### **5. fare_amount<0 or trip_distance<=0:**\n",
+					"142563 rows => Drop them off \n",
+					"#### **6. passenger count<0:**\n",
+					"present in distinct values (separate from null)\n",
+					"treatment: keep (TLC legitimately inc dispatch or unmetered 0 passenger flag rows )"
+				]
+			},
+			{
+				"cell_type": "markdown",
+				"metadata": {
+					"nteract": {
+						"transient": {
+							"deleting": false
+						}
+					}
+				},
+				"source": [
+					""
+				]
+			},
+			{
+				"cell_type": "code",
+				"source": [
+					"''' Silver Transformation Code '''\n",
+					"\n",
+					"silver_df = (\n",
+					"    df\n",
+					"    .fillna({\n",
+					"        \"passenger_count\": 1,\n",
+					"        \"RatecodeID\": 99,\n",
+					"        \"store_and_fwd_flag\": \"N\",\n",
+					"        \"congestion_surcharge\": 0.0,\n",
+					"        \"Airport_fee\": 0.0\n",
+					"    })\n",
+					"    .filter(\n",
+					"        (F.col(\"tpep_pickup_datetime\") >= \"2024-03-01\") &\n",
+					"        (F.col(\"tpep_pickup_datetime\") < \"2024-04-01\")\n",
+					"    )\n",
+					"    .filter(F.col(\"tpep_dropoff_datetime\") >= F.col(\"tpep_pickup_datetime\"))\n",
+					"    .filter((F.col(\"fare_amount\") > 0) & (F.col(\"trip_distance\") > 0))\n",
+					"    # Add trip_duration_minutes for downstream Gold use\n",
+					"    .withColumn(\n",
+					"        \"trip_duration_minutes\",\n",
+					"        (F.unix_timestamp(\"tpep_dropoff_datetime\") - F.unix_timestamp(\"tpep_pickup_datetime\")) / 60\n",
+					"    )\n",
+					")\n",
+					"\n",
+					"print(f\"Records Lost Post Clean Up: {df.count()-silver_df.count()}\")  # sanity check vs expected ~3.44M after drops\n",
+					"\n",
+					"silver_df.write.format(\"delta\").mode(\"overwrite\").save(\n",
+					"    \"abfss://silver@idestorageaccount.dfs.core.windows.net/nyc_yellow_taxi\"\n",
+					")"
+				],
+				"execution_count": 16
+			}
+		]
+	}
+}
